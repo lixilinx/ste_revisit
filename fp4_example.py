@@ -1,56 +1,36 @@
-import matplotlib.pyplot as plt
-import numpy as np
+import torch 
 
-# nvidia fp4 has values {-6, -4, -3, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 4, 6}
-
-def fp4(x):
+def fp4(x, noise_level):
     """
-    Simulate the fp4 quantization function. 
+    Simulation of the Nvidia FP4 quantization function that supports the STE.
+    The FP4 has values {-6, -4, -3, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 4, 6}.
+    Set the noise level in range 0 <= noise_level <= 1. 
     """
-    s = np.sign(x)
-    x = np.abs(x)
-    if x > (1.5 + 2)/2:
-        if x > (3 + 4)/2:
-            if x > (4 + 6)/2:
-                y = 6
-            else:
-                y = 4
-        else:
-            if x > (2 + 3)/2:
-                y = 3
-            else:
-                y = 2
-    else:
-        if x > (0.5 + 1)/2:
-            if x > (1 + 1.5)/2:
-                y = 1.5
-            else:
-                y = 1
-        else:
-            if x > (0 + 0.5)/2:
-                y = 0.5
-            else:
-                y = 0 
-    return s * y
+    with torch.no_grad():
+        s = torch.sign(x)
+        a = torch.abs(x)
+        z = torch.min(2*a, torch.min(a + 2, 0.5*a + 4))
+        z += noise_level * (torch.rand_like(z) - 0.5)
+        z = torch.round(z)
+        z = torch.clamp(z, min=-7, max=7)
+        y = s * torch.max(0.5*z, torch.max(z - 2, 2*z - 8))
+    y = x - (x - y).detach()
+    return y
 
 
-x = np.arange(-8, 8, 0.001)
-y = np.stack([fp4(a) for a in x])
-plt.plot(x, y, 'k')
-
-dy_dx = np.zeros_like(x) # Dirac delta function 
-for i in range(1, len(x)):
-    dy_dx[i] = y[i] - y[i-1] 
-plt.plot(x, dy_dx, linewidth=0.5, color='red')
-plt.scatter(x[dy_dx>0], dy_dx[dy_dx>0], marker='^', linewidth=0.5, color="red", label="_nolegend_")
-
-sigma2 = 0.5
-manifested_dy_dx = np.zeros_like(x)
-for i in range(len(dy_dx)):
-    if dy_dx[i] > 0:
-        manifested_dy_dx += dy_dx[i] * np.exp(-(x - x[i])**2/(2*sigma2))/(2*np.pi*sigma2)
-plt.plot(x, manifested_dy_dx, color="blue")
-
-plt.xlabel(r"$x$")
-plt.legend([r"${\rm fp4}(x)$", r"$\frac{d\, {\rm fp4}(x)}{dx}$", r"$E_{v\sim \mathcal{N}(0, 0.5)}\left[\frac{d\, {\rm fp4}(x-v)}{dx}\right]$"])
-plt.savefig("fp4_example.svg")             
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+    
+    x = torch.arange(-6, 6, 0.001)
+    y = fp4(x, noise_level=0.5)
+    plt.plot(x, y)
+    
+    x = torch.arange(-6, 6, 0.01)
+    y = fp4(x, noise_level=0.0)
+    plt.plot(x, y)
+    plt.grid()
+    plt.xlabel(r"$x$")
+    plt.ylabel(r"Sample of ${\rm fp4}(x + v)$")
+    plt.legend([r"$v\sim U(-0.25, 0.25)$", r"$v=0$"])
+    plt.savefig("fp4_example.svg")
+    

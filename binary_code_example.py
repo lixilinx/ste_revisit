@@ -5,7 +5,6 @@ from torchvision import datasets, transforms
     
 device = torch.device("cuda")
 optimizer = "psgd" # psgd or adam
-passing_derivative_with = "dirac_delta" # dirac_delta or straight_through 
 
 if optimizer.lower() == "psgd":
     try:
@@ -17,98 +16,82 @@ train_loader = torch.utils.data.DataLoader(
     datasets.CIFAR10("../data", train=True, download=True,
                      transform=transforms.Compose([transforms.ToTensor()])),    
     batch_size=500, shuffle=True)
+test_loader = torch.utils.data.DataLoader(
+    datasets.CIFAR10("../data", train=False, download=True,
+                     transform=transforms.Compose([transforms.ToTensor()])),    
+    batch_size=500, shuffle=True)
 
-
-class DSign(torch.autograd.Function):
-    """
-    A differentiable version of the sign function, whose derivative is 2*delta(x). 
-    """
-    @staticmethod
-    def forward(ctx, input, pdf="gauss", scale=1.0):
-        if pdf.lower() == "gauss":
-            output = input - scale * torch.randn_like(input)
-        else:
-            raise ValueError("Unknown pdf")
-            
-        ctx.save_for_backward(input)
-        ctx.pdf = pdf
-        ctx.scale = scale 
-        
-        return output
     
-    @staticmethod
-    def backward(ctx, grad_output):
-        (input,) = ctx.saved_tensors
-        pdf = ctx.pdf
-        scale = ctx.scale 
-        
-        if pdf.lower() == "gauss":
-            grad_input = grad_output * 2*torch.exp(-input*input/(2*scale**2))/(2*torch.pi*scale**2)**0.5
-        else:
-            raise ValueError("Unknown pdf")
-            
-        return (grad_input, None, None)
-    
-    
-class Encoder(torch.nn.Module):
+class Codec(torch.nn.Module):
     def __init__(self):
-        super(Encoder, self).__init__()
-        self.wb1 = torch.nn.Parameter(torch.randn(3*32*32+1, 16384)/(3*32*32)**0.5)
-        self.wb2 = torch.nn.Parameter(torch.randn(16384+1, 1024)/128)
+        super(Codec, self).__init__()
+        self.wb1_encoder = torch.nn.Parameter(torch.randn(3*32*32+1, 16384)/(3*32*32)**0.5)
+        self.wb2_encoder = torch.nn.Parameter(torch.randn(16384+1, 1024)/128)
+        self.wb1_decoder = torch.nn.Parameter(torch.randn(1024+1, 16384)/32)
+        self.wb2_decoder = torch.nn.Parameter(torch.randn(16384+1, 3*32*32)/128)
         
-    def forward(self, x):
-        w, b = self.wb1[:-1], self.wb1[-1]
+    def forward(self, x, noise_level):
+        # encoder 
+        w, b = self.wb1_encoder[:-1], self.wb1_encoder[-1]
         x = torch.tanh(torch.reshape(x, (-1, 3*32*32)) @ w + b)
-        w, b = self.wb2[:-1], self.wb2[-1]
+        w, b = self.wb2_encoder[:-1], self.wb2_encoder[-1]
         x = x @ w + b
-        return x
-    
-class Decoder(torch.nn.Module):
-    def __init__(self):
-        super(Decoder, self).__init__()
-        self.wb1 = torch.nn.Parameter(torch.randn(1024+1, 16384)/32)
-        self.wb2 = torch.nn.Parameter(torch.randn(16384+1, 3*32*32)/128)
         
-    def forward(self, x):
-        w, b = self.wb1[:-1], self.wb1[-1]
+        # tokenization
+        x = x * torch.rsqrt(1 + x*x)
+        x = x - (x - torch.sign(x + noise_level*(torch.rand_like(x) - 0.5))).detach()
+        
+        # decoder
+        w, b = self.wb1_decoder[:-1], self.wb1_decoder[-1]
         x = torch.tanh(x @ w + b)
-        w, b = self.wb2[:-1], self.wb2[-1]
+        w, b = self.wb2_decoder[:-1], self.wb2_decoder[-1]
         x = torch.reshape(x @ w + b, (-1,3,32,32))
+        
         return x
     
     
-encoder = Encoder().to(device)
-decoder = Decoder().to(device)
+codec = Codec().to(device)
 if optimizer.lower() == "psgd":
-    opt = KWNS4(list(encoder.parameters()) + list(decoder.parameters()),
+    opt = KWNS4(codec.parameters(),
                 whiten_grad=True,
-                lr_params=2e-5,
+                lr_params=1e-4,
                 lr_preconditioner=0.5,
                 momentum=0.9,
                 weight_decay=0)
 else:
-    opt = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
-                           lr=2e-5)
+    opt = torch.optim.Adam(codec.parameters(),
+                           lr=1e-4,
+                           betas=(0.9, 0.99))
     
 
-Losses = []
+def test(data_loader):
+    sum_loss, num_samples = 0.0, 0
+    with torch.no_grad():
+        for inputs, _ in data_loader:
+            x = inputs.to(device)
+            xhat = codec(x, 0.0)
+            sum_loss += torch.sum(torch.square(x - xhat)).item()
+            num_samples += x.shape[0]
+
+    return sum_loss / (num_samples*3*32*32)
+    
+
+test_losses = []
+noise_level = 1.0
 for epoch in range(100):
     for batch, (data, _) in enumerate(train_loader):
         x = data.to(device)
-        y = encoder(x)
-        if passing_derivative_with == "dirac_delta":
-            z = DSign.apply(y)
-        else: # straight_through
-            z = y + (torch.sign(y) - y).detach()
-        xhat = decoder(z)
+        xhat = codec(x, noise_level)
         
         opt.zero_grad()
         loss = torch.mean(torch.square(x - xhat))
         loss.backward()
         opt.step()
-        Losses.append(loss.item())
-        print(f"epoch {epoch+1}; batch {batch+1}; loss {Losses[-1]}")
+        print(f"epoch {epoch+1}; batch {batch+1}; train loss {loss.item()}")
         
+    test_losses.append(test(test_loader))
+    print(f"epoch {epoch+1}; test loss {test_losses[-1]}")
+    noise_level = 0.9*noise_level + 0.1*0.1 # anneal noise level to 0.1 
     if optimizer.lower() == "psgd":
         # anneal lr_preconditioner to 0.1 and update frequency to 0.01
         opt.param_groups[0]["lr_preconditioner"] *= 0.9
@@ -116,8 +99,8 @@ for epoch in range(100):
         opt.param_groups[0]["preconditioner_update_probability"] *= 0.9
         opt.param_groups[0]["preconditioner_update_probability"] += 0.1*0.01
 
-plt.plot(-10*np.log10(Losses))
-plt.ylabel("PSNR (dB)")
-plt.xlabel("Number of iterations")
+plt.plot(-10*np.log10(test_losses))
+plt.ylabel("Test PSNR (dB)")
+plt.xlabel("Number of epochs")
 plt.title("CIFAR10 reconstruction with binary codes")
 plt.savefig("binary_code_example.svg")
