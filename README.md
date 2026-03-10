@@ -1,11 +1,11 @@
-# Passing through gradient with the Dirac delta function
-It's common to encounter discontinuous function $y=f(x)$ like quantization, step and sign functions, clustering, etc. There exists many choices to pass through the gradients to offer different tradeoffs between bias and variance, say continuous relaxation like Gumbel-Softmax and estimators like REINFORCE and straight-through. But, if the derivative of $f(\cdot)$ can be expressed with the Dirac delta function, generally we can get less biased and lower variance gradient estimator by passing through the gradient as
+# A revisit of the straight-through estimator (STE)
+It's common to encounter discontinuous function $y=f(x)$ like quantization, step and sign functions, clustering, etc. There exists many choices to pass through the gradients to offer different tradeoffs between bias and variance, say continuous relaxation like Gumbel-Softmax and estimators like REINFORCE and straight-through. But, if the derivative of $f(\cdot)$ can be expressed with the Dirac delta function, generally we could get less biased and lower variance gradient estimator by passing through the gradient as
 
 $$ E_{v\sim p_V(v)}\left[ \frac{\partial f(x-v)}{\partial x} \right\] $$
 
-where $v$ is drawn from a pdf $p_V(\cdot)$ and $E_v[\cdot]$ is replaced with sample average during training.     
+where $v$ is drawn from a pdf $p_V(\cdot)$ and $E_v[\cdot]$ is replaced with sample average during training. This technique is widely applicable, for both scalar- and vector-valued functions. Here, we focus on its application to the straight-through estimator (STE).       
 
-## Recovery of the straight-through estimator (STE) 
+## Example 1: recovery of the STE
 Let the target function be $y=f(x)={\rm round}(x)$. Its derivative is $\frac{dy}{dx} = \ldots +\delta(x+1.5) + \delta(x+0.5) + \delta(x-0.5) +\delta(x-1.5)+ \ldots$. Let $v\sim \mathcal{U}(-0.5, 0.5)$, i.e., $p_V(v)=I(-0.5\le v< 0.5)$. Then, we have, 
 
 $$ 
@@ -15,27 +15,46 @@ E_{v\sim \mathcal{U}(-0.5, 0.5)}\left[ \frac{\partial f(x-v)}{\partial x} \right
 & = \ldots + I(-1\le x<0) + I(0\le x < 1) + \ldots = 1
 \end{aligned}$$
 
-This is the STE. The injected noise reduces the bias of STE. We can treat the Dirac delta function as a legitimate function and pass through any order of derivatives in this way. Noise injection is to manifest the Dirac delta function as an ordinary function for numerical calculations. Clearly, with $p_V(v)=\delta(v)$, we recover the original derivative.     
+This is the STE. The injected noise reduces the bias of STE. We can treat the Dirac delta function as a legitimate function and pass through any order of derivatives in this way. Clearly, with $p_V(v)=\delta(v)$, we recover the original derivative. 
 
-## Concept illustration with the Nvidia FP4 quantization function 
+## Example 2: STE for the sign function
 
-Run [this script](https://github.com/lixilinx/Passing-through-gradient-with-the-Dirac-delta-function/blob/main/fp4_example.py) to generate the following image to illustrate this idea. 
-![fp4](https://github.com/lixilinx/Passing-through-gradient-with-the-Dirac-delta-function/blob/main/fp4_example.svg)
+Derivative of the sign function $y={\rm sign}(x)$ is $\frac{dy}{dx} = 2\delta(x)$. We let $v\sim U(-a, a)$, i.e., $p_V(v) = \frac{1}{2a}I(-a\le v<a)$, where $a>0$. Then, it's ready to show that $E_{v\sim U(-a, a)}\left[ 2 \delta(x-v) p_V(v)\right] = I(-a\le x<a)/a \propto I(-a\le x<a)$. This example suggests that the STE applies to the sign function only for $x$ in a compact set like $x\in [-a, a]$. Intuitively, any finite rounding noise could be ineffective to regularize the training if $x$ can take arbitrarily large values. Hence, the STE can only be valid for $x$ in a compact set. 
 
-## Example for encoder latent variable tokenization 
+## Example 3: STE for the Nvidia FP4 quantization function 
 
-[This script](https://github.com/lixilinx/Passing-through-gradient-with-the-Dirac-delta-function/blob/main/binary_code_example.py) gives an example on how to tokenize the latent variable of a simple codec trained for the CIFAR10 images. The codebook is $\\{\pm 1, \pm 1, \ldots\\}$. The target function and its derivative are $f(x)={\rm sign}(x)$ and $2\delta(x)$, respectively. Without any tricks, the PSGD optimizer can reach peak SNR (PSNR) 30+ dB after a few hundreds of thousands iterations. The STE can only achieve PSNR 20+ dB, generating unsatisfactory reconstructed images.    
-![binary_code](https://github.com/lixilinx/Passing-through-gradient-with-the-Dirac-delta-function/blob/main/binary_code_example.svg)
+The Nvidia FP4 can take values $\\{-6, -4, -3, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 4, 6\\}$. Different from example 1, these values are not equally spaced. Hence, it's not obvious to design a $p_V(\cdot)$ such that the smoothed derivative becomes a constant. Still, we can design a monotonic mapping from set 
 
-## Example for weights quantization 
-[This script](https://github.com/lixilinx/Passing-through-gradient-with-the-Dirac-delta-function/blob/main/triple_weight_example.py) gives an example on how to quantize the weights of a simple CIFAR10 codec to $\\{0, \pm 1\\}$, up to certain scaling differences. The target function and its derivative are $f(x)=I(x>1) - I(x<-1)$ and $\delta(x+1) + \delta(x-1)$, respectively. Since $f(x)$ is not scaling-invariant, we do need to anneal down the noise level during training. The PSGD optimizer can reach PSNR 30+ dB with 100K iterations. Surprisingly, the simple STE can reach PSNR 30+ dB too.    
+$$\\{-6, -4, -3, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 4, 6\\}$$ 
 
-![triple_weights](https://github.com/lixilinx/Passing-through-gradient-with-the-Dirac-delta-function/blob/main/triple_weight_example.svg)
+to set 
 
-## Concluding comments 
-The classic STE seems to perform pretty well in many cases. Still, its bias clearly limits its performance for certain applications. Passing through gradient with the Dirac delta function provides a more principled way to solve such problems, although it makes the resultant optimization problem more challenging. The selection of $p_V(\cdot)$ can be tricky too, although here we just use the normal pdf for illustration.  
+$$\\{-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7\\}$$
 
-The method here resembles STE and Gumbel-Softmax like methods that all produce low variance gradient estimators. But, we use noise injection to reduce the bias. It's also related to stochastic rounding for bias reduction. But, stochastic rounding does not connect the pdf of injected noise and gradient propagation. 
+and reuse the math in example 1 to make the function $y=f(x)$ compatible with the STE.   
 
-This Dirac delta function method can be generalized to multivariable functions as well, e.g., vector quantization and clustering. Unfortunately, closed-form solutions are available only for very few cases (to my knowledge). 
+Run [this script](https://github.com/lixilinx/ste_revisit/blob/main/fp4_example.py) to generate the following image to illustrate this idea. Piece-wise linear functions are used for the mappings between the two sets in this example (surely, any proper monotonic mapping can be good). Again, the STE can only be valid for $x$ in a compact set.   
+![fp4](https://github.com/lixilinx/ste_revisit/blob/main/fp4_example.svg)
+
+## Example 4: application to encoder latent variable tokenization 
+
+[This script](https://github.com/lixilinx/ste_revisit/blob/main/binary_code_example.py) gives an example on how to tokenize the latent variable of a simple codec trained for the CIFAR10 images. The codebook is $\\{\pm 1, \pm 1, \ldots\\}$. The naive Pytorch implementation for the sign function could be 
+
+$$ y = x - (x - {\rm torch.sign}(x)).{\rm detach}() $$
+
+such that the derivative is a constant $1.0$. However, there is no stochastic noise to regularize the training. Also, $x$ here can be arbitrarily large. Following the discussion of example 2, we can first map $x$ to a compact set and then take its sign as  
+
+$$
+\begin{aligned}
+x & \leftarrow x/\sqrt{1+x^2} \\
+y & = x - (x - {\rm torch.sign}(x + {\rm noise\\_level}*({\rm torch.rand\\_like}(x) - 0.5))).{\rm detach}()
+\end{aligned}
+$$
+
+where $0\le {\rm noise\\_level}\le 2$ since $|x|<1$ and we should anneal it to a small enough number when approaching convergence. A less competitive optimizer like Adam benefits a lot from the improved STE. 
+
+![binary_code](https://github.com/lixilinx/ste_revisit/blob/main/binary_code_example.svg)
+
+
+
 
