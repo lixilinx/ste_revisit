@@ -10,7 +10,7 @@ def fp4(x, noise_level):
         s = torch.sign(x)
         a = torch.abs(x)
         z = torch.min(2*a, torch.min(a + 2, 0.5*a + 4))
-        z += noise_level * (torch.rand_like(z) - 0.5)
+        z -= noise_level * (torch.rand_like(z) - 0.5)
         z = torch.round(z)
         z = torch.clamp(z, min=-7, max=7)
         y = s * torch.max(0.5*z, torch.max(z - 2, 2*z - 8))
@@ -30,7 +30,7 @@ if __name__ == "__main__":
     plt.plot(x, y)
     plt.grid()
     plt.xlabel(r"$x$")
-    plt.ylabel(r"Sample of ${\rm fp4}(x + v)$")
+    plt.ylabel(r"Sample of ${\rm fp4}(x - v)$")
     plt.legend([r"$v\sim U(-0.25, 0.25)$", r"$v=0$"])
     plt.savefig("fp4_example.svg")
     

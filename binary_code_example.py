@@ -38,8 +38,8 @@ class Codec(torch.nn.Module):
         x = x @ w + b
         
         # tokenization
-        x = x * torch.rsqrt(1 + x*x)
-        x = x - (x - torch.sign(x + noise_level*(torch.rand_like(x) - 0.5))).detach()
+        x = x * torch.rsqrt(1 + x*x) # bound the dynamic range of x
+        x = x - (x - torch.sign(x - noise_level*(torch.rand_like(x) - 0.5))).detach()
         
         # decoder
         w, b = self.wb1_decoder[:-1], self.wb1_decoder[-1]
@@ -76,8 +76,8 @@ def test(data_loader):
     return sum_loss / (num_samples*3*32*32)
     
 
-test_losses = []
-noise_level = 1.0
+train_losses, test_losses = [], []
+noise_level = 2.0
 for epoch in range(100):
     for batch, (data, _) in enumerate(train_loader):
         x = data.to(device)
@@ -87,7 +87,8 @@ for epoch in range(100):
         loss = torch.mean(torch.square(x - xhat))
         loss.backward()
         opt.step()
-        print(f"epoch {epoch+1}; batch {batch+1}; train loss {loss.item()}")
+        train_losses.append(loss.item())
+        print(f"epoch {epoch+1}; batch {batch+1}; train loss {train_losses[-1]}")
         
     test_losses.append(test(test_loader))
     print(f"epoch {epoch+1}; test loss {test_losses[-1]}")
@@ -99,8 +100,16 @@ for epoch in range(100):
         opt.param_groups[0]["preconditioner_update_probability"] *= 0.9
         opt.param_groups[0]["preconditioner_update_probability"] += 0.1*0.01
 
-plt.plot(-10*np.log10(test_losses))
-plt.ylabel("Test PSNR (dB)")
-plt.xlabel("Number of epochs")
-plt.title("CIFAR10 reconstruction with binary codes")
+plt.figure(figsize=(8, 4))
+ax1 = plt.subplot(121)
+ax2 = plt.subplot(122)
+ax1.yaxis.tick_right()
+ax2.yaxis.tick_right()
+smoothed_train_losses = np.convolve(train_losses, np.ones(10)/10)[9:-9]
+ax1.plot(-10*np.log10(smoothed_train_losses))
+ax1.set_xlabel("Number of iterations")
+ax1.set_ylabel("Train PSNR (dB)")
+ax2.plot(-10*np.log10(test_losses))
+ax2.set_ylabel("Test PSNR (dB)")
+ax2.set_xlabel("Number of epochs")
 plt.savefig("binary_code_example.svg")
