@@ -1,12 +1,12 @@
 # The straight-through estimator (STE): a revisit
-It's common to encounter discontinuous function $y=f(x)$ like quantization, step and sign functions, clustering, etc. There exists many choices to pass through the gradients to offer different tradeoffs between bias and variance, say continuous relaxation like Gumbel-Softmax and estimators like REINFORCE and straight-through. But, if the derivative of $f(\cdot)$ can be expressed with the Dirac delta function, generally we could get improved gradient estimator by passing through the gradient as
+It's common to encounter discontinuous function $y=f(x)$ like quantization, step and sign functions, clustering, etc. There exists many choices to pass through the gradients to offer different tradeoffs between bias and variance, say continuous relaxation like Gumbel-Softmax and estimators like REINFORCE and straight-through. But, if the derivative of $f(\cdot)$ can be expressed with the Dirac delta function, we could pass through the gradient with the Dirac $\delta(\cdot)$ function and smooth out it with stochastic rounding noise as    
 
 $$ E_{v\sim p_V(v)}\left[ \frac{\partial f(x-v)}{\partial x} \right\]  = \frac{\partial f(x)}{\partial x} \circledast p_V(x) $$
 
-where $v$ is drawn from a distribution with pdf $p_V(\cdot)$, $E_v[\cdot]$ is replaced with sample average during training and $\circledast$ denotes convolution. This technique is widely applicable, for both scalar- and vector-valued functions. Here, we focus on its application to the straight-through estimator (STE).       
+where $v$ is drawn from a distribution with pdf $p_V(\cdot)$, $E_v[\cdot]$ is replaced with sample average during training and $\circledast$ denotes convolution. Really nothing new here, but the Dirac delta function trick can make things easier. Here, we focus on its application to the STE.       
 
 ## Example 1: recovery of the STE
-Let the target function be $y=f(x)={\rm round}(x)$. Its derivative is $\frac{dy}{dx} = \ldots +\delta(x+1.5) + \delta(x+0.5) + \delta(x-0.5) +\delta(x-1.5)+ \ldots$. Let $v\sim \mathcal{U}(-0.5, 0.5)$, i.e., $p_V(v)=I(-0.5\le v< 0.5)$. Then, we have, 
+Let the target function be $y=f(x)={\rm round}(x)$. Its derivative is $\frac{dy}{dx} = \ldots +\delta(x+1.5) + \delta(x+0.5) + \delta(x-0.5) +\delta(x-1.5)+ \ldots$. Let $v\sim \mathcal{U}(-0.5, 0.5)$, i.e., $p_V(v)=I(-0.5\le v< 0.5)$, where $I(\cdot)$ is the indicator function. Then, we have, 
 
 $$ 
 \begin{aligned}
@@ -31,7 +31,7 @@ to set
 
 $$\\{0, \pm 1, \pm 2, \pm 3, \pm 4, \pm 5, \pm 6, \pm 7\\}$$
 
-and reuse the math in example 1. Basically, we redefine $f(\cdot)$ as $y=g^{-1}(r(g(x)))=g^{-1}\circ r \circ g(x)$, where $r$ is the rounding function and $g^{-1}$ is the inverse function of $g$. Then, we get derivative $\frac{dy}{dx}=g^{-1\'}\circ r^{'} \circ g^{'}(x)$. the derivatives of $g$ and its inverse roughly cancel out each other and the derivative of $r$ smoothes out to a constant as in example 1. In this way, the STE still applies.        
+and reuse the math in example 1. Basically, we redefine $f(\cdot)$ as $y=g^{-1}(r(g(x)))=g^{-1}\circ r \circ g(x)$, where $r$ is the rounding function and $g^{-1}$ is the inverse function of $g$. Then, we get derivative $\frac{dy}{dx}=g^{-1\'}\circ r^{'} \circ g^{'}(x)$. The derivatives of $g$ and its inverse roughly cancel out each other and the derivative of $r$ smoothes out to a constant as in example 1. In this way, the STE still applies.        
 
 Run [this script](https://github.com/lixilinx/ste_revisit/blob/main/fp4_example.py) to generate the following image to illustrate this idea. Piece-wise linear functions are used for the mappings between the two sets in this example (any proper monotonic mapping can be good). Again, the STE here can only be valid for $x$ in a compact set.   
 ![fp4](https://github.com/lixilinx/ste_revisit/blob/main/fp4_example.svg)
@@ -51,7 +51,7 @@ y & = x - (x - {\rm torch.sign}(x - {\rm noise\\_level}*({\rm torch.rand\\_like}
 \end{aligned}
 $$
 
-where $0\le {\rm noise\\_level}\le 2$ and we should anneal it to a small enough number when approaching convergence. We have tried two optimizers and both benefit from the improved STE. 
+where $0\le {\rm noise\\_level}\le 2$ and we should anneal it to a small enough value when approaching convergence. We have tried two optimizers and both benefit from the improved STE. 
 
 ![binary_code](https://github.com/lixilinx/ste_revisit/blob/main/binary_code_example.svg)
 
