@@ -55,6 +55,6 @@ where $0\le {\rm noise\\_level}\le 2$ and we should anneal it to a small enough 
 
 ![binary_code](https://github.com/lixilinx/ste_revisit/blob/main/binary_code_example.svg)
 
+## Example 5: latent vector quantization (VQ) via router 
 
-
-
+The standard VQ process is: encoder $\rightarrow$ VQ $\rightarrow$ decoder. Gradient passes through the VQ component with the STE. But, most likely the codes are not evenly distributed and thus the STE doesn't make perfect sense (see the FP4 example). To unwrap the codes, we insert a router and only quantize the router outputs to one-hot vectors, which further select the codes from a codebook. See [this script](https://github.com/lixilinx/ste_revisit/blob/main/vq_example.py) for an example. Those one-hot vectors are evenly distributed and a STE makes perfect sense now. This practice simplifies the design a lot. No concern of code collapse. No extra losses like VQ loss and commitment loss. It's stable and also improves the performance for this toy example.
