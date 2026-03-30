@@ -23,16 +23,26 @@ test_loader = torch.utils.data.DataLoader(
 
 
 class VQ(torch.nn.Module):
+    """
+    In the traditional VQ, we quantize x to code c directly, where c minimizes dist(x, c). 
+    With our math, we have a mask or router r and the quantized x is given by
+        q(r) * codebook,
+    where q(r) is the quantized mask or router, and you can define this r in any way. 
+    Here, we simply define r as softmax(-dist(x, c)/dim**0.5).   
+    """
     def __init__(self, num_code, dim_code):
         super(VQ, self).__init__()
+        self.num_code = num_code
+        self.dim_code = dim_code
         self.codebook = torch.nn.Parameter(torch.randn(num_code, dim_code))
         
     def forward(self, x, noise_level):
-        x = torch.nn.functional.softmax(x, dim=1)
-        idx = torch.argmax(x - noise_level*torch.rand_like(x), dim=1)
-        one_hot = torch.nn.functional.one_hot(idx, num_classes=x.shape[1]).float()
-        x = x - (x - one_hot).detach()
-        y = x @ self.codebook   
+        d = torch.cdist(x, self.codebook, p=2)  # distance 
+        r = torch.nn.functional.softmax(-d / self.dim_code**0.5, dim=1) # soft router 
+        idx = torch.argmax(r - noise_level*torch.rand_like(r), dim=1)
+        one_hot = torch.nn.functional.one_hot(idx, num_classes=r.shape[1]).float() # hard router 
+        r = r - (r - one_hot).detach() # we quantize r, not x directly
+        y = r @ self.codebook   
         return y 
 
     
@@ -46,7 +56,6 @@ class Codec(torch.nn.Module):
         self.codebook4 = VQ(num_code_per_book, dim_code_per_book)
         self.wb1_encoder = torch.nn.Parameter(torch.randn(3*32*32+1, 16384)/(3*32*32)**0.5)
         self.wb2_encoder = torch.nn.Parameter(torch.randn(16384+1, 4*dim_code_per_book)/128)
-        self.wb_router = torch.nn.Parameter(torch.randn(4*dim_code_per_book+1, 4*num_code_per_book)/(4*dim_code_per_book)**0.5)
         self.wb1_decoder = torch.nn.Parameter(torch.randn(4*dim_code_per_book+1, 16384)/(4*dim_code_per_book)**0.5)
         self.wb2_decoder = torch.nn.Parameter(torch.randn(16384+1, 3*32*32)/128)
         
@@ -56,10 +65,6 @@ class Codec(torch.nn.Module):
         x = torch.tanh(torch.reshape(x, (-1, 3*32*32)) @ w + b)
         w, b = self.wb2_encoder[:-1], self.wb2_encoder[-1]
         x = torch.tanh(x @ w + b) # we don't VQ x directly 
-        
-        # router: argmax(x) will point out which code to use
-        w, b = self.wb_router[:-1], self.wb_router[-1]
-        x = x @ w + b 
         
         # VQ with 4 codebooks 
         x1, x2, x3, x4 = torch.chunk(x, 4, 1)
@@ -81,7 +86,7 @@ class Codec(torch.nn.Module):
 codec = Codec().to(device)
 if optimizer.lower() == "psgd":
     opt = KWNS4(codec.parameters(),
-                whiten_grad=False, # sparse gradient => whiten momentum  
+                whiten_grad=False, # larger lr_params if whitening grad=True  
                 lr_params=1e-4/4,
                 lr_preconditioner=0.5,
                 momentum=0.9,
@@ -120,7 +125,7 @@ for epoch in range(100):
         
     test_losses.append(test(test_loader))
     print(f"epoch {epoch+1}; test loss {test_losses[-1]}")
-    noise_level = 0.9*noise_level + 0.1*0.1 # anneal noise level to 0.1 
+    noise_level /=2 
     if optimizer.lower() == "psgd":
         # anneal lr_preconditioner to 0.1 and update frequency to 0.01
         opt.param_groups[0]["lr_preconditioner"] *= 0.9
