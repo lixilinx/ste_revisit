@@ -69,9 +69,9 @@ class Codec(torch.nn.Module):
         # VQ with 4 codebooks 
         x1, x2, x3, x4 = torch.chunk(x, 4, 1)
         x1 = self.codebook1(x1, noise_level)
-        x2 = self.codebook1(x2, noise_level)
-        x3 = self.codebook1(x3, noise_level)
-        x4 = self.codebook1(x4, noise_level)
+        x2 = self.codebook2(x2, noise_level)
+        x3 = self.codebook3(x3, noise_level)
+        x4 = self.codebook4(x4, noise_level)
         x = torch.cat((x1, x2, x3, x4), dim=1)
         
         # decoder
